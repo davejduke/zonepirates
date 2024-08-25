@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Over</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap" rel="stylesheet">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background-color: black;
+            color: white;
+            font-family: 'Montserrat', sans-serif;
+            text-align: center;
+        }
+
+        #gameOverContainer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="gameOverContainer">
+        <h1>GAME OVER</h1>
+        <p id="scoreDisplay"></p>
+        <p id="highScoreDisplay"></p>
+        <p>Press any key (except Enter) to restart</p>
+    </div>
+    <script>
+        // Function to get a cookie by name
+        function getCookie(name) {
+            const value = `; ${document.cookie}`;
+            const parts = value.split(`; ${name}=`);
+            if (parts.length === 2) return parts.pop().split(';').shift();
+        }
+
+        // Function to set a cookie
+        function setCookie(name, value, days) {
+            let expires = "";
+            if (days) {
+                const date = new Date();
+                date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
+                expires = "; expires=" + date.toUTCString();
+            }
+            document.cookie = name + "=" + (value || "") + expires + "; path=/";
+        }
+
+        // Retrieve the score from localStorage
+        const score = parseInt(localStorage.getItem('score')) || 0;
+        document.getElementById('scoreDisplay').textContent = `Score: ${score}`;
+
+        // Retrieve the high score from the cookie
+        let highScore = parseInt(getCookie('highScore')) || 0;
+
+        // Update high score if current score is higher
+        if (score > highScore) {
+            highScore = score;
+            setCookie('highScore', highScore, 365); // Set the cookie to expire in 1 year
+        }
+
+        document.getElementById('highScoreDisplay').textContent = `High Score: ${highScore}`;
+
+        // Flag to indicate if the initial key up event has occurred
+        let initialKeyUpOccurred = false;
+
+        // Event listener for key up
+        window.addEventListener('keyup', () => {
+            initialKeyUpOccurred = true;
+        });
+
+        // Event listener to restart the game on any key press, after the initial key up event
+        window.addEventListener('keydown', (event) => {
+            if (initialKeyUpOccurred && event.keyCode !== 13) { // Exclude Enter key (keyCode 13)
+                window.location.href = 'index.html'; // Redirect to index.html to restart the game
+            }
+        });
+
+        // Play gameover.mp3 audio
+        const gameOverSound = new Audio('gameover.mp3');
+        gameOverSound.play().catch(error => console.error("Error playing game over sound:", error));
+    </script>
+</body>
+
+</html>

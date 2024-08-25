@@ -1,0 +1,2351 @@
+I apologize for the confusion. Here's the complete source code with the modifications to incorporate the ship designs:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zonepirates by Dave@DaveDuke.co.uk</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: black;
+        }
+
+        canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Load sound effects
+        const fireSound = new Audio('missileaway.mp3');
+        const bangSound = new Audio('explosion2.mp3');
+        // Add this with your other audio declarations
+        const thrustSound = new Audio('thrust.mp3');
+        thrustSound.loop = true;
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Map size (10x larger than before)
+        const mapWidth = canvas.width * 28;
+        const mapHeight = canvas.height * 28;
+        const SAFE_SPAWN_DISTANCE = 800; // Adjust as needed
+
+        // Camera position
+        const camera = {
+            x: 0,
+            y: 0
+        };
+        let fireMode = 1; // Global variable to control the firing mode
+
+        let fuel = 1000;
+        let zoom = 1.0;
+        const minZoom = 0.5;
+        const maxZoom = 3.0;
+        let targetZoom = zoom;
+
+        // Event listener for mouse wheel to zoom in and out
+        window.addEventListener('wheel', (e) => {
+            if (e.deltaY < 0) {
+                // Zoom in
+                targetZoom = Math.min(maxZoom, targetZoom * 1.1);
+            } else {
+                // Zoom out
+                targetZoom = Math.max(minZoom, targetZoom / 1.1);
+            }
+        });
+
+        // Pastel colors array
+        const pastelColors = [
+            'rgba(80, 80, 80, 1)', // Light Pink
+            'rgba(122, 122, 122, 1)', // Light Peach
+            'rgba(44, 44, 44, 1)', // Light Orange
+            'rgba(55, 55, 55, 1)', // Light Yellow
+            'rgba(33, 33, 33, 1)', // Light Green
+            'rgba(99, 99, 99, 1)', // Light Cyan
+            'rgba(255, 255, 0, 1)', // Light Lavender
+            'rgba(22, 22, 22, 1)'  // Light Rose
+        ];
+
+        const ashipFireSound = new Audio('fire1.mp3');
+
+        let shipDesigns = {};
+
+        function loadShipData() {
+            console.log("Loading ship data...");
+            return fetch('shipdata.html')
+                .then(response => response.text())
+                .then(data => {
+                    const lines = data.split('\n');
+                    lines.slice(1).forEach(line => {
+                        const [name, r, g, b, x, y] = line.split(',').map(item => item.replace(/"/g, ''));
+                        if (!shipDesigns[name]) {
+                            shipDesigns[name] = [];
+                        }
+                        shipDesigns[name].push({
+                            color: `rgb(${r}, ${g}, ${b})`, // Keep this for non-WebGL rendering
+                            colorGL: [parseFloat(r) / 255, parseFloat(g) / 255, parseFloat(b) / 255], // Add this for WebGL
+                            x: parseFloat(x) / 1000,
+                            y: parseFloat(y) / 1000
+                        });
+                    });
+                    console.log("Ship designs loaded:", shipDesigns);
+                })
+                .catch(error => console.error("Error loading ship data:", error));
+        }
+
+        class AShip {
+            constructor(type, x, y) {
+                this.type = type;
+                this.color = AShip.colors[type];
+                this.x = x;
+                this.y = y;
+                this.velocity = { x: (Math.random() - 0.5) * 2, y: (Math.random() - 0.5) * 2 };
+                this.rotationSpeed = (Math.random() - 0.5) * 0.01;
+                this.angle = Math.random() * Math.PI * 2;
+                this.targetAngle = this.angle;
+                this.changeDirectionTimer = Math.random() * 100;
+                this.thrusting = false;
+                this.fireCooldown = 0;
+                this.size = 222;  // Add this line
+                const designNames = Object.keys(shipDesigns);
+                if (designNames.length > 0) {
+                    const randomDesignName = designNames[Math.floor(Math.random() * designNames.length)];
+                    this.design = shipDesigns[randomDesignName];
+                    this.calculateCenterOfMass();
+                    this.calculateRadius();
+                    this.calculateFrontAndBackPoints();
+                } else {
+                    console.warn("No ship designs available when creating AShip");
+                    this.centerOfMass = { x: 0, y: 0 };
+                    this.radius = 25;
+                }
+            }
+
+            calculateCenterOfMass() {
+                let sumX = 0, sumY = 0;
+                for (let point of this.design) {
+                    sumX += point.x;
+                    sumY += point.y;
+                }
+                this.centerOfMass = {
+                    x: sumX / this.design.length,
+                    y: sumY / this.design.length
+                };
+            }
+
+            calculateRadius() {
+                let maxDistance = 0;
+                for (let point of this.design) {
+                    const dx = point.x - this.centerOfMass.x;
+                    const dy = point.y - this.centerOfMass.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance > maxDistance) {
+                        maxDistance = distance;
+                    }
+                }
+                this.radius = maxDistance * this.size;  // Multiply by size
+            }
+            calculateFrontAndBackPoints() {
+                if (this.design && this.design.length > 0) {
+                    // Front point is the first point in the design
+                    this.frontPoint = {
+                        x: (this.design[0].x - this.centerOfMass.x) * this.size,
+                        y: (this.design[0].y - this.centerOfMass.y) * this.size
+                    };
+
+                    // Back point is opposite to the front point
+                    this.backPoint = {
+                        x: -this.frontPoint.x,
+                        y: -this.frontPoint.y
+                    };
+                } else {
+                    // Fallback if no design is available
+                    this.frontPoint = { x: this.radius, y: 0 };
+                    this.backPoint = { x: -this.radius, y: 0 };
+                }
+            }
+            addThrustParticle() {
+                if (particles.length >= maxParticles) return;
+
+                const spreadAngle = (Math.random() - 0.5) * 0.5; // Slight spread
+                const particleAngle = this.angle + Math.PI + spreadAngle;
+
+                const speed = 0.5 + Math.random() * 1;
+
+                // Use the back point for thrust
+                const spawnPoint = {
+                    x: this.x + (Math.cos(this.angle) * this.backPoint.x - Math.sin(this.angle) * this.backPoint.y),
+                    y: this.y + (Math.sin(this.angle) * this.backPoint.x + Math.cos(this.angle) * this.backPoint.y)
+                };
+
+                // Add some randomness to the spawn position
+                const randomOffset = 2 * this.size;
+                const spawnX = spawnPoint.x + (Math.random() - 0.5) * randomOffset / 22;
+                const spawnY = spawnPoint.y + (Math.random() - 0.5) * randomOffset / 22;
+
+                particles.push({
+                    x: spawnX,
+                    y: spawnY,
+                    radius: (0.5 + Math.random() * 0.5) * this.size / 44,
+                    velocity: {
+                        x: Math.cos(particleAngle) * speed + this.velocity.x * 0.1,
+                        y: Math.sin(particleAngle) * speed + this.velocity.y * 0.1
+                    },
+                    life: 0.6 + Math.random() * 0.2,
+                    color: 'rgba(255, 100, 0, 0.7)'
+                });
+            }
+
+            update() {
+                // Smoothly change the angle towards the target angle
+                const angleDiff = (this.targetAngle - this.angle + Math.PI * 3) % (Math.PI * 2) - Math.PI;
+                this.angle += angleDiff * 0.05;
+
+                this.x += this.velocity.x;
+                this.y += this.velocity.y;
+
+                // Add inertia effect when changing direction
+                if (this.thrusting) {
+                    this.velocity.x += Math.cos(this.angle) * 0.05;
+                    this.velocity.y += Math.sin(this.angle) * 0.05;
+
+                    // Add thrust particles
+                    if (Math.random() < 0.3) { // Adjust this value to control particle density
+                        this.addThrustParticle();
+                    }
+                }
+
+                // Randomly change direction
+                this.changeDirectionTimer--;
+                if (this.changeDirectionTimer <= 0) {
+                    this.changeDirectionTimer = Math.random() * 100;
+                    this.targetAngle = Math.random() * 2 * Math.PI;
+                    this.thrusting = true;
+                }
+
+                // Apply inertia (simulate drag)
+                this.velocity.x *= 0.98;
+                this.velocity.y *= 0.98;
+
+                // Wrap around the map
+                this.x = (this.x + mapWidth) % mapWidth;
+                this.y = (this.y + mapHeight) % mapHeight;
+
+                // Avoid planets
+                planets.forEach(planet => {
+                    const dx = planet.x - this.x;
+                    const dy = planet.y - this.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < planet.radius + this.radius + 50) { // 50 is the avoidance buffer
+                        const angle = Math.atan2(dy, dx) + Math.PI;
+                        this.velocity.x = Math.cos(angle) * 2;
+                        this.velocity.y = Math.sin(angle) * 2;
+                    }
+                });
+
+                // Check if pointing within 10 degrees of the player's ship
+                const dx = ship.x - this.x;
+                const dy = ship.y - this.y;
+                const angleToShip = Math.atan2(dy, dx);
+                const angleDifference = Math.abs((angleToShip - this.angle + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+                if (angleDifference < Math.PI / 18) { // 10 degrees in radians
+                    this.fireMissile();
+                }
+
+                // Decrease the cooldown timer
+                if (this.fireCooldown > 0) {
+                    this.fireCooldown--;
+                }
+            }
+
+
+            draw(ctx) {
+                const visibleLeft = camera.x;
+                const visibleRight = camera.x + canvas.width / zoom;
+                const visibleTop = camera.y;
+                const visibleBottom = camera.y + canvas.height / zoom;
+
+                if (this.x + this.radius >= visibleLeft && this.x - this.radius <= visibleRight &&
+                    this.y + this.radius >= visibleTop && this.y - this.radius <= visibleBottom) {
+                    ctx.save();
+                    ctx.translate((this.x - camera.x) * zoom, (this.y - camera.y) * zoom);
+                    ctx.rotate(this.angle);
+                    ctx.scale(zoom * this.size, zoom * this.size);  // Multiply by size
+
+                    if (this.design && this.design.length > 1) {
+                        ctx.beginPath();
+                        ctx.moveTo(this.design[0].x - this.centerOfMass.x,
+                            this.design[0].y - this.centerOfMass.y);
+                        for (let i = 1; i < this.design.length; i++) {
+                            ctx.lineTo(this.design[i].x - this.centerOfMass.x,
+                                this.design[i].y - this.centerOfMass.y);
+                        }
+                        ctx.closePath();
+                        ctx.strokeStyle = this.design[0].color;
+                        ctx.lineWidth = 2 / (zoom * this.size);  // Adjust for size
+                        ctx.stroke();
+
+                        // Draw a large green dot on the front of the ship
+                        const offsetDistance = 20; // Adjust this value as needed to move the dot forward
+                        const frontX = (this.design[this.design.length - 1].x - this.centerOfMass.x) * this.size + Math.cos(this.angle) * offsetDistance;
+                        const frontY = (this.design[this.design.length - 1].y - this.centerOfMass.y) * this.size + Math.sin(this.angle) * offsetDistance;
+                        console.log(`Front X: ${frontX}, Front Y: ${frontY}`); // Debug log
+
+                        ctx.beginPath();
+                        ctx.arc(frontX, frontY, 5 / this.size, 0, Math.PI * 2); // Adjust the size of the green dot
+                        ctx.fillStyle = 'green';
+                        ctx.fill();
+                    }
+
+                    // Draw hitbox
+                    ctx.beginPath();
+                    ctx.arc(0, 0, this.radius / this.size, 0, Math.PI * 2);  // Divide by size
+                    ctx.strokeStyle = 'rgba(255, 0, 0, 0.5)';
+                    ctx.lineWidth = 1 / (zoom * this.size);  // Adjust for size
+                    ctx.stroke();
+
+                    // Draw center of mass
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 2 / (zoom * this.size), 0, Math.PI * 2);  // Adjust for size
+                    ctx.fillStyle = 'yellow';
+                    ctx.fill();
+
+
+                    // Draw a white dot at the front of the ship with an offset
+                    const offsetDistance = 20; // Adjust this value as needed to move the dot forward
+                    const frontX = Math.cos(this.angle) * offsetDistance;
+                    const frontY = Math.sin(this.angle) * offsetDistance;
+
+                    ctx.beginPath();
+                    ctx.arc(frontX, frontY, 2 / (zoom * this.size), 0, Math.PI * 2);  // Adjust for size
+                    ctx.fillStyle = 'white';
+                    ctx.fill();
+
+
+                    ctx.restore();
+                }
+            }
+
+
+
+
+
+            fireMissile() {
+                if (this.fireCooldown <= 0) {
+                    const dx = ship.x - this.x;
+                    const dy = ship.y - this.y;
+                    const angleToShip = Math.atan2(dy, dx);
+                    const angleDifference = Math.abs((angleToShip - this.angle + Math.PI * 3) % (Math.PI * 2) - Math.PI);
+
+                    if (angleDifference < Math.PI / 36) { // 5 degrees in radians (5 * Math.PI / 180 = Math.PI / 36)
+                        const jitterAmount = 0.2;
+                        const speedJitterAmount = 1.0;
+                        const angle = this.angle + (Math.random() - 0.5) * jitterAmount;
+                        const missileSpeed = 3 + (Math.random() - 0.5) * speedJitterAmount;
+
+                        const extraDistance = this.radius + 50; // Add a large extra distance to move the missile spawn point further in front
+
+                        const spawnPoint = {
+                            x: this.x + Math.cos(this.angle) * extraDistance,
+                            y: this.y + Math.sin(this.angle) * extraDistance
+                        };
+
+                        missiles.push({
+                            x: spawnPoint.x,
+                            y: spawnPoint.y,
+                            velocity: {
+                                x: Math.cos(angle) * missileSpeed + this.velocity.x,
+                                y: Math.sin(angle) * missileSpeed + this.velocity.y
+                            }
+                        });
+
+                        // Play the firing sound
+                        ashipFireSound.currentTime = 0;
+                        ashipFireSound.play();
+
+                        // Set the cooldown timer
+                        this.fireCooldown = 100;
+                    }
+                }
+            }
+
+
+
+
+        }
+
+        // Define the colors for AShip types (assuming this is defined outside the class)
+        AShip.colors = [
+            'red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'orange', 'purple',
+            'pink', 'lime', 'teal', 'violet', 'brown', 'grey', 'white', 'white'
+        ];
+
+        // Triangle (ship) properties
+        const ship = {
+            x: mapWidth / 2,
+            y: mapHeight / 2,
+            radius: 20,
+            angle: 0,
+            rotation: 0,
+            velocity: { x: 0, y: 0 },
+            rotationSpeed: 0.05,
+            thrust: 0.05,
+            maxSpeed: 10,
+            drag: 0.9999 // Increased to make drifting longer
+
+        };
+
+        // Define 16 colors for the 16 types
+        AShip.colors = [
+            'red', 'green', 'blue', 'yellow', 'cyan', 'magenta', 'orange', 'purple',
+            'pink', 'lime', 'teal', 'violet', 'brown', 'grey', 'white', 'white'
+        ];
+
+        // Preload "you are dead" sound
+        const deathSound = new Audio('you are dead.mp3');
+
+        // Add these variables at the top of your script with other global variables
+        let thrusterVolume = 0;
+        const maxThrusterVolume = 0.5; // Adjust this value to set the maximum volume
+        const volumeTransitionSpeed = 0.05; // Adjust this to change how quickly the volume changes
+
+        // Starfield properties
+        const stars = [];
+        const numStars = 1740;  // Increased for larger map
+        const maxStarDepth = .7; // Maximum z-depth for stars
+
+        // Planet properties
+        const planets = [];
+        const numPlanets = 450;  // Increased for larger map
+
+        // Spheres behind ship
+        const orbiters = [];
+
+        // Particle trail properties
+        const particles = [];
+        const maxParticles = 2700;
+
+        // Missile properties
+        const missiles = [];
+        const maxMissiles = 80;
+        const missileSpeed = 4;
+
+        // Alien properties
+        const aliens = [];
+        const numAliens = 50;
+        const alienRadius = 230;
+        const alienSpeed = .1;
+        const alienMaxSpeed = 2.5; // You can adjust this value as needed
+        const spawnRadius = 188000; // Define the radius around the ship where aliens can spawn
+        let shipDestroyed = false;
+        let score = 0;
+        let lives = 3;
+
+        const aships = [];
+
+        for (let type = 0; type < 16; type++) {
+            for (let i = 0; i < 110; i++) {
+                let x, y;
+                const safeDistance = 800;
+                do {
+                    x = Math.random() * mapWidth;
+                    y = Math.random() * mapHeight;
+                } while (isPositionInsidePlanet(x, y) || isTooCloseToPlayer(x, y, safeDistance));
+
+                aships.push(new AShip(type, x, y));
+            }
+        }
+
+        // Generate stars
+        for (let i = 0; i < numStars; i++) {
+            const colorChoice = Math.random();
+            let color;
+            if (colorChoice < 0.33) {
+                color = 'white';
+            } else if (colorChoice < 0.66) {
+                color = 'rgb(100, 149, 237)';  // Cornflower blue
+            } else {
+
+                color = 'rgb(0, 255, 255)';  // Cyan
+            }
+            stars.push({
+                x: Math.random() * mapWidth,
+                y: Math.random() * mapHeight,
+                radius: Math.random() * 5 + 0.15,  // Slightly varied star sizes
+                color: color
+            });
+        }
+
+
+        function drawOrbiters() {
+            ctx.save();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'; // Semi-transparent white for lines
+            ctx.fillStyle = 'blue';
+
+            orbiters.forEach((orbiter, index) => {
+                // Draw line to parent
+                ctx.beginPath();
+                ctx.moveTo((orbiter.parent.x - camera.x) * zoom, (orbiter.parent.y - camera.y) * zoom);
+                ctx.lineTo((orbiter.x - camera.x) * zoom, (orbiter.y - camera.y) * zoom);
+                ctx.stroke();
+
+                // Draw orbiter
+                ctx.beginPath();
+                ctx.arc((orbiter.x - camera.x) * zoom, (orbiter.y - camera.y) * zoom, orbiter.radius * zoom, 0, Math.PI * 2);
+                ctx.fill();
+            });
+
+            ctx.restore();
+        }
+
+        function initializeOrbiters() {
+            orbiters.length = 0; // Clear existing orbiters
+            const numOrbiters = 5;
+            const orbitRadius = 50; // Distance between each orbiter
+
+            for (let i = 0; i < numOrbiters; i++) {
+                const parent = i === 0 ? ship : orbiters[i - 1];
+                const angle = Math.random() * Math.PI * 2; // Random initial angle
+                orbiters.push({
+                    x: parent.x + Math.cos(angle) * orbitRadius,
+                    y: parent.y + Math.sin(angle) * orbitRadius,
+                    radius: ship.radius,
+                    velocity: { x: 0, y: 0 },
+                    parent: parent
+                });
+            }
+        }
+        function drawFuelBar() {
+            const maxFuel = 5000; // Maximum fuel level
+            const fuelBarWidth = 300; // Width of the fuel bar
+            const fuelBarHeight = 20; // Height of the fuel bar
+
+            ctx.save();
+            // Draw black background
+            ctx.fillStyle = 'black';
+            ctx.fillRect(10, 10, fuelBarWidth + 4, fuelBarHeight + 4);
+
+            // Draw purple fuel bar
+            ctx.fillStyle = 'purple';
+            const fuelWidth = (fuel / maxFuel) * fuelBarWidth;
+            ctx.fillRect(12, 12, fuelWidth, fuelBarHeight);
+
+            // Draw white stroke around the fuel bar
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(10, 10, fuelBarWidth + 4, fuelBarHeight + 4);
+
+            ctx.restore();
+        }
+
+        // Function to check if a position overlaps with any planet
+        function isPositionInsidePlanet(x, y) {
+            for (let planet of planets) {
+                const dx = planet.x - x;
+                const dy = planet.y - y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < planet.radius) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        for (let i = 0; i < numPlanets; i++) {
+            planets.push({
+                x: Math.random() * mapWidth,
+                y: Math.random() * mapHeight,
+                radius: Math.random() * 100 + 50,
+                mass: Math.random() * 5000 + 2500,
+                color: pastelColors[Math.floor(Math.random() * pastelColors.length)],
+                velocity: {
+                    x: (Math.random() - 0.15) * 0.12,
+                    y: (Math.random() - 0.15) * 0.12
+                },
+                hasRings: Math.random() < 0.3, // 30% chance of having rings
+                ringColor: `rgba(${Math.random() * 255}, ${Math.random() * 255}, ${Math.random() * 255}, 0.5)`,
+                ringAngle: Math.random() * Math.PI * 2 // Random rotation of the rings
+            });
+        }
+        // Define size range for aliens
+        const minAlienRadius = 15;
+        const maxAlienRadius = 40;
+        const rotationSpeedFactor = 0.00005; // Adjust this value to control spin speed
+
+        // Generate aliens
+        for (let i = 0; i < numAliens; i++) {
+            let x, y;
+            do {
+                const angle = Math.random() * 2 * Math.PI;
+                const distance = Math.random() * 800; // Reduced spawn radius
+                x = ship.x + Math.cos(angle) * distance;
+                y = ship.y + Math.sin(angle) * distance;
+            } while (isPositionInsidePlanet(x, y));
+
+            const radius = Math.random() * (maxAlienRadius - minAlienRadius) + minAlienRadius;
+
+            aliens.push({
+                x: x,
+                y: y,
+                radius: radius,
+                mass: Math.PI * radius * radius,
+                mass: Math.PI * radius * radius,
+                angle: Math.random() * Math.PI * 2,
+                targetAngle: Math.random() * Math.PI * 2,
+                velocity: {
+                    x: (Math.random() - 0.5) * 2,
+                    y: (Math.random() - 0.5) * 2
+                },
+                rotationSpeed: (Math.random() - 0.05) * rotationSpeedFactor,
+                rotation: Math.random() * Math.PI * 2,
+                speed: Math.random() * alienSpeed + 1,
+                maxSpeed: alienMaxSpeed,
+                isOriginal: true,
+                canSplit: true
+            });
+        }
+
+        // Key states
+        const keys = {
+            w: false,
+            a: false,
+            s: false,
+            d: false,
+            Enter: false,
+            ' ': false  // Add space key
+        };
+
+        // Event listeners for key presses
+        window.addEventListener('keydown', (e) => {
+            if (shipDestroyed) return; // Prevent actions if the ship is destroyed
+            if (e.key in keys) keys[e.key] = true && fuel > 0;
+            if (e.key === 'Enter' || e.key === ' ') fireMissile();  // Allow both Enter and Space
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.key in keys) keys[e.key] = false;
+        });
+        const maxInitialSpeed = 28; // Adjust this value to change the maximum initial speed
+        function createAliens() {
+            aliens.length = 0; // Clear existing aliens
+            const numAliens = 50; // Adjust this number as needed
+            const minDistance = 800; // Minimum distance from the player
+            const maxDistance = 2000; // Maximum distance from the player
+
+            for (let i = 0; i < numAliens; i++) {
+                // Calculate a random position in any direction around the player
+                const distance = minDistance + Math.random() * (maxDistance - minDistance);
+                const angle = Math.random() * Math.PI * 2; // Random angle between 0 and 2π
+                const x = ship.x + Math.cos(angle) * distance;
+                const y = ship.y + Math.sin(angle) * distance;
+
+                // Ensure the position is within the map boundaries
+                const wrappedX = (x + mapWidth) % mapWidth;
+                const wrappedY = (y + mapHeight) % mapHeight;
+
+                const alien = {
+                    x: wrappedX,
+                    y: wrappedY,
+                    radius: Math.random() * 45 + 15, // Random size between 15 and 60
+                    velocity: {
+                        x: (Math.random() - 0.5) * 2 * maxInitialSpeed,
+                        y: (Math.random() - 0.5) * 2 * maxInitialSpeed
+                    },
+                    isOriginal: true,
+                    canSplit: true
+                };
+
+                aliens.push(alien);
+            }
+
+            console.log(`Created ${aliens.length} aliens around the player`);
+        }
+
+        function isTooCloseToPlayer(x, y, minDistance) {
+            const dx = x - ship.x;
+            const dy = y - ship.y;
+            return Math.sqrt(dx * dx + dy * dy) < minDistance;
+        }
+        function updateStars(dx, dy) {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            stars.forEach(star => {
+                // Calculate parallax effect based on z-depth
+                const parallaxFactor = (maxStarDepth - star.z) / maxStarDepth;
+                star.x -= dx * parallaxFactor;
+                star.y -= dy * parallaxFactor;
+
+                // Wrap stars around when they move off-screen
+                if (star.x < visibleLeft) star.x = visibleRight;
+                if (star.x > visibleRight) star.x = visibleLeft;
+                if (star.y < visibleTop) star.y = visibleBottom;
+                if (star.y > visibleBottom) star.y = visibleTop;
+            });
+
+
+            ship.x += ship.velocity.x;
+            ship.y += ship.velocity.y;
+
+            // Wrap around the map
+            ship.x = (ship.x + mapWidth) % mapWidth;
+            ship.y = (ship.y + mapHeight) % mapHeight;
+
+            // Ensure camera follows the ship
+            camera.x = ship.x - (canvas.width / 2) / zoom;
+            camera.y = ship.y - (canvas.height / 2) / zoom;
+        }
+
+
+
+
+        // Add a function to update planet positions
+        function updatePlanets() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            const collidedPlanets = new Set();
+
+            for (let i = 0; i < planets.length; i++) {
+                if (collidedPlanets.has(i)) continue;
+
+                const planet = planets[i];
+
+                // Check if the planet is visible
+                const planetVisible =
+                    (planet.x + planet.radius >= visibleLeft && planet.x - planet.radius <= visibleRight) &&
+                    (planet.y + planet.radius >= visibleTop && planet.y - planet.radius <= visibleBottom);
+
+                if (!planetVisible) continue; // Skip calculations for invisible planets
+
+                // Update position based on velocity
+                planet.x += planet.velocity.x;
+                planet.y += planet.velocity.y;
+
+                // Wrap around the map
+                planet.x = (planet.x + mapWidth) % mapWidth;
+                planet.y = (planet.y + mapHeight) % mapHeight;
+
+                // Check for collisions with other visible planets
+                for (let j = i + 1; j < planets.length; j++) {
+                    if (collidedPlanets.has(j)) continue;
+
+                    const otherPlanet = planets[j];
+
+                    const otherPlanetVisible =
+                        (otherPlanet.x + otherPlanet.radius >= visibleLeft && otherPlanet.x - otherPlanet.radius <= visibleRight) &&
+                        (otherPlanet.y + otherPlanet.radius >= visibleTop && otherPlanet.y - otherPlanet.radius <= visibleBottom);
+
+                    if (!otherPlanetVisible) continue;
+
+                    const dx = otherPlanet.x - planet.x;
+                    const dy = otherPlanet.y - planet.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < planet.radius + otherPlanet.radius) {
+                        // Collision detected
+                        const totalMass = planet.mass + otherPlanet.mass;
+                        const newRadius = Math.sqrt(planet.radius * planet.radius + otherPlanet.radius * otherPlanet.radius);
+
+                        // Update the current planet
+                        planet.mass = totalMass;
+                        planet.radius = newRadius;
+                        planet.velocity.x = (planet.velocity.x * planet.mass + otherPlanet.velocity.x * otherPlanet.mass) / totalMass;
+                        planet.velocity.y = (planet.velocity.y * planet.mass + otherPlanet.velocity.y * otherPlanet.mass) / totalMass;
+
+                        // Mark the other planet for removal
+                        collidedPlanets.add(j);
+
+                        // Create an explosion effect at the collision point
+                        const collisionX = (planet.x + otherPlanet.x) / 2;
+                        const collisionY = (planet.y + otherPlanet.y) / 2;
+                        createExplosion(collisionX, collisionY, 5, 'white');
+                    }
+                }
+
+                // Apply gravitational effects from other visible planets
+                for (let j = 0; j < planets.length; j++) {
+                    if (i !== j && !collidedPlanets.has(j)) {
+                        const otherPlanet = planets[j];
+
+                        const otherPlanetVisible =
+                            (otherPlanet.x + otherPlanet.radius >= visibleLeft && otherPlanet.x - otherPlanet.radius <= visibleRight) &&
+                            (otherPlanet.y + otherPlanet.radius >= visibleTop && otherPlanet.y - otherPlanet.radius <= visibleBottom);
+
+                        if (!otherPlanetVisible) continue;
+
+                        const dx = otherPlanet.x - planet.x;
+                        const dy = otherPlanet.y - planet.y;
+                        const distanceSquared = dx * dx + dy * dy;
+                        const distance = Math.sqrt(distanceSquared);
+                        const force = (otherPlanet.mass / distanceSquared) * 0.01; // Reduced force for stability
+
+                        planet.velocity.x += (dx / distance) * force;
+                        planet.velocity.y += (dy / distance) * force;
+                    }
+                }
+
+                // Apply a small drag to prevent excessive speeds
+                planet.velocity.x *= 0.999;
+                planet.velocity.y *= 0.999;
+            }
+
+            // Remove collided planets
+            for (let i = planets.length - 1; i >= 0; i--) {
+                if (collidedPlanets.has(i)) {
+                    planets.splice(i, 1);
+                }
+            }
+        }
+
+        function respawnAlienOutsideVisibleArea(alien) {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+            const safeDistance = 80;
+
+            let x, y;
+            do {
+                const angle = Math.random() * 2 * Math.PI;
+                const distance = Math.random() * (spawnRadius - safeDistance) + safeDistance;
+                x = ship.x + Math.cos(angle) * distance;
+                y = ship.y + Math.sin(angle) * distance;
+            } while (isPositionInsidePlanet(x, y) ||
+            isTooCloseToPlayer(x, y, safeDistance) ||
+
+                (x > visibleLeft && x < visibleRight && y > visibleTop && y < visibleBottom));
+
+            alien.x = x;
+            alien.y = y;
+            alien.velocity = {
+                x: (Math.random() - 0.5) * 2,
+                y: (Math.random() - 0.5) * 2
+            };
+            alien.rotation = Math.random() * Math.PI * 2;
+            alien.rotationSpeed = (Math.random() - 0.005) * 0.005; // Reset rotation speed when respawning
+        }
+        function updateAShips() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            aships.forEach(aship => {
+                // Check if the aship is visible
+                const ashipVisible =
+                    (aship.x + aship.radius >= visibleLeft && aship.x - aship.radius <= visibleRight) &&
+                    (aship.y + aship.radius >= visibleTop && aship.y - aship.radius <= visibleBottom);
+
+                if (!ashipVisible) return; // Skip calculations for invisible aships
+
+                aship.update();
+            });
+        }
+
+        function drawAShips() {
+            aships.forEach(aship => aship.draw(ctx));
+        }
+
+        function respawnAlienOutsideVisibleArea(alien) {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            let x, y;
+            do {
+                const angle = Math.random() * 2 * Math.PI;
+                const distance = Math.random() * spawnRadius;
+                x = ship.x + Math.cos(angle) * distance;
+                y = ship.y + Math.sin(angle) * distance;
+            } while (isPositionInsidePlanet(x, y) ||
+                (x > visibleLeft && x < visibleRight &&
+                    y > visibleTop && y < visibleBottom));
+
+            alien.x = x;
+            alien.y = y;
+            alien.velocity = {
+                x: (Math.random() - 0.5) * 2,
+                y: (Math.random() - 0.5) * 2
+            };
+            alien.rotation = Math.random() * Math.PI * 2;
+            alien.rotationSpeed = (Math.random() - 0.005) * 0.005; // Reset rotation speed when respawning
+        }
+
+        function drawMapBoundaries() {
+            ctx.save();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(
+                (0 - camera.x) * zoom,
+                (0 - camera.y) * zoom,
+                mapWidth * zoom,
+                mapHeight * zoom
+            );
+            ctx.restore();
+        }
+
+        function isOnScreen(x, y) {
+            return x >= camera.x - canvas.width / zoom / 2 &&
+                x <= camera.x + canvas.width / zoom / 2 &&
+                y >= camera.y - canvas.height / zoom / 2 &&
+                y <= camera.y + canvas.height / zoom / 2;
+        }
+
+        function updateZoom() {
+            zoom += (targetZoom - zoom) * 0.1;
+            camera.x = ship.x - (canvas.width / 2) / zoom;
+            camera.y = ship.y - (canvas.height / 2) / zoom;
+        }
+
+        function drawShip() {
+            ctx.save();
+
+            // Define the rotation point relative to the ship's center
+            const rotationOffsetX = ship.radius * -.8; // Rotate around a point halfway to the front
+            const rotationOffsetY = 0; // Keep vertical center
+
+            // Translate to the ship's position
+            ctx.translate((ship.x - camera.x) * zoom, (ship.y - camera.y) * zoom);
+            ctx.scale(zoom, zoom); // Apply zoom scaling
+
+            // Move to the rotation point
+            ctx.translate(rotationOffsetX, rotationOffsetY);
+
+            // Apply rotation
+            ctx.rotate(ship.angle);
+
+            // Move back from the rotation point
+            ctx.translate(-rotationOffsetX, -rotationOffsetY);
+
+            // Calculate and store the ship's front point relative to the pivot
+            ship.frontPoint = {
+                x: ship.radius * 0.77 - rotationOffsetX,
+                y: 0
+            };
+
+            // Draw main triangle with front point reduced by 30%
+            ctx.beginPath();
+            ctx.moveTo(ship.radius * 0.77, 0);  // Front point
+            ctx.lineTo(-ship.radius * 1.2, -ship.radius * 0.6);
+            ctx.lineTo(-ship.radius, 0);
+            ctx.lineTo(-ship.radius * 1.2, ship.radius * 0.6);
+            ctx.closePath();
+            ctx.strokeStyle = 'white';
+            ctx.lineWidth = 5;
+            ctx.stroke();
+            ctx.fillStyle = 'blue';
+            ctx.fill();
+
+            // Draw inverted small triangle at the base
+            const smallTriangleSize = ship.radius * 0.3;
+            ctx.beginPath();
+            ctx.moveTo(-ship.radius, 0);
+            ctx.lineTo(-ship.radius - smallTriangleSize, -smallTriangleSize);
+            ctx.lineTo(-ship.radius - smallTriangleSize, smallTriangleSize);
+            ctx.closePath();
+            ctx.strokeStyle = 'black';
+            ctx.stroke();
+            ctx.fillStyle = 'red';
+
+            ctx.fill();
+
+            ctx.restore();
+        }
+        function drawStars() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            stars.forEach(star => {
+                const parallaxFactor = (maxStarDepth - star.z) / maxStarDepth;
+
+                // Calculate star position relative to camera
+                let adjustedX = (star.x - camera.x) * zoom;
+                let adjustedY = (star.y - camera.y) * zoom;
+
+                // Apply parallax effect
+                adjustedX = adjustedX * parallaxFactor + canvas.width * (1 - parallaxFactor) / 2;
+                adjustedY = adjustedY * parallaxFactor + canvas.height * (1 - parallaxFactor) / 2;
+
+                ctx.beginPath();
+                ctx.arc(adjustedX, adjustedY, star.radius * zoom, 0, Math.PI * 2);
+
+                // Create a twinkling effect
+                const twinkle = Math.random() * 0.5 + 0.5;  // Random value between 0.5 and 1
+
+                if (star.color === 'white') {
+                    ctx.fillStyle = `rgba(255, 255, 255, ${twinkle})`;
+                } else if (star.color === 'rgb(100, 149, 237)') {
+                    ctx.fillStyle = `rgba(100, 149, 237, ${twinkle})`;
+                } else {
+                    ctx.fillStyle = `rgba(0, 255, 255, ${twinkle})`;
+                }
+
+                ctx.fill();
+            });
+        }
+
+        function drawPlanets() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            planets.forEach(planet => {
+                const planetVisible =
+                    (planet.x + planet.radius >= visibleLeft && planet.x - planet.radius <= visibleRight) &&
+                    (planet.y + planet.radius >= visibleTop && planet.y - planet.radius <= visibleBottom);
+
+                if (planetVisible) {
+                    ctx.save();
+                    ctx.translate((planet.x - camera.x) * zoom, (planet.y - camera.y) * zoom);
+                    ctx.scale(zoom, zoom); // Apply zoom scaling
+
+                    if (planet.hasRings) {
+                        // Draw back part of the rings
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, planet.radius * 1.5, planet.radius * 0.5, planet.ringAngle, Math.PI, 2 * Math.PI);
+                        ctx.strokeStyle = planet.ringColor;
+                        ctx.lineWidth = planet.radius * 0.2;
+                        ctx.stroke();
+
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, planet.radius * 1.6, planet.radius * 0.55, planet.ringAngle, Math.PI, 2 * Math.PI);
+                        ctx.strokeStyle = planet.ringColor;
+                        ctx.lineWidth = planet.radius * 0.05;
+                        ctx.stroke();
+                    }
+
+                    // Draw planet
+                    ctx.beginPath();
+                    ctx.arc(0, 0, planet.radius, 0, Math.PI * 2);
+                    ctx.fillStyle = planet.color;
+                    ctx.fill();
+                    ctx.strokeStyle = 'white';
+                    ctx.lineWidth = 1;
+                    ctx.stroke();
+
+                    if (planet.hasRings) {
+                        // Draw front part of the rings
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, planet.radius * 1.5, planet.radius * 0.5, planet.ringAngle, 0, Math.PI);
+                        ctx.strokeStyle = planet.ringColor;
+                        ctx.lineWidth = planet.radius * 0.2;
+                        ctx.stroke();
+
+                        ctx.beginPath();
+                        ctx.ellipse(0, 0, planet.radius * 1.6, planet.radius * 0.55, planet.ringAngle, 0, Math.PI);
+                        ctx.strokeStyle = planet.ringColor;
+                        ctx.lineWidth = planet.radius * 0.05;
+                        ctx.stroke();
+                    }
+
+                    ctx.restore();
+                }
+            });
+        }
+
+        function drawParticles() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            particles.forEach(particle => {
+                if (particle.x >= visibleLeft && particle.x <= visibleRight &&
+                    particle.y >= visibleTop && particle.y <= visibleBottom) {
+
+                    ctx.beginPath();
+                    ctx.arc((particle.x - camera.x) * zoom, (particle.y - camera.y) * zoom, Math.max(particle.radius * zoom, 1), 0, Math.PI * 2);
+                    ctx.fillStyle = particle.color || `rgba(100, 100, 200, ${particle.life / 3})`;
+                    ctx.fill();
+                }
+            });
+
+            // Debug information
+
+        }
+
+        function drawMissiles() {
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            const currentTime = Date.now();
+            const glowSpeed = 200; // Adjust this value to change the speed of color alternation
+            const missileRadius = 3.5; // Adjust this value to change the size of the missiles
+
+            missiles.forEach(missile => {
+                if (missile.x >= visibleLeft && missile.x <= visibleRight &&
+                    missile.y >= visibleTop && missile.y <= visibleBottom) {
+
+                    // Calculate color based on time
+                    const colorPhase = (currentTime % glowSpeed) / glowSpeed;
+                    const red = 200;
+                    const green = Math.sin(colorPhase * Math.PI) * 255;
+                    const blue = Math.sin(colorPhase * Math.PI) * 255;
+
+                    ctx.fillStyle = `rgb(${red}, ${green}, ${blue})`;
+
+                    ctx.beginPath();
+                    ctx.arc(
+                        (missile.x - camera.x) * zoom,
+                        (missile.y - camera.y) * zoom,
+                        missileRadius * zoom, // Use the new missileRadius here
+                        0,
+                        Math.PI * 2
+                    );
+                    ctx.fill();
+
+                    // Optional: Add a glow effect
+                    ctx.shadowBlur = 10;
+                    ctx.shadowColor = `rgb(${red}, ${green}, ${blue})`;
+                    ctx.fill();
+                    ctx.shadowBlur = 0; // Reset shadow blur
+                }
+            });
+        }
+
+        function updateShip() {
+            const previousX = ship.x;
+            const previousY = ship.y;
+
+            // Update rotation
+            if (keys.a) ship.rotation = -ship.rotationSpeed;
+            else if (keys.d) ship.rotation = ship.rotationSpeed;
+            else ship.rotation = 0;
+
+            ship.angle += ship.rotation;
+
+            // Apply thrust only if there's fuel
+            if (fuel > 0) {
+                if (keys.w) {
+                    ship.velocity.x += Math.cos(ship.angle) * ship.thrust;
+                    ship.velocity.y += Math.sin(ship.angle) * ship.thrust;
+                    addParticle(false); // false for forward thrust
+                    fuel--; // Reduce fuel by 1
+                } else if (keys.s) {
+                    ship.velocity.x -= Math.cos(ship.angle) * ship.thrust * 0.5;
+                    ship.velocity.y -= Math.sin(ship.angle) * ship.thrust * 0.5;
+                    addParticle(true); // true for reverse thrust
+                    fuel--; // Reduce fuel by 1
+                }
+            }
+
+            // Handle thruster sound
+            handleThrusterSound();
+
+            applyGravity(ship);
+
+            ship.velocity.x *= ship.drag;
+            ship.velocity.y *= ship.drag;
+
+            const speed = Math.sqrt(ship.velocity.x ** 2 + ship.velocity.y ** 2);
+            if (speed > ship.maxSpeed) {
+                ship.velocity.x = (ship.velocity.x / speed) * ship.maxSpeed;
+                ship.velocity.y = (ship.velocity.y / speed) * ship.maxSpeed;
+            }
+
+            ship.x += ship.velocity.x;
+            ship.y += ship.velocity.y;
+
+            const dx = ship.x - previousX;
+            const dy = ship.y - previousY;
+            updateOrbiters();
+
+
+            // Update stars based on ship movement
+            updateStars(dx, dy);
+
+            ship.x = (ship.x + mapWidth) % mapWidth;
+            ship.y = (ship.y + mapHeight) % mapHeight;
+
+            checkShipCollisions();
+            zoom += (targetZoom - zoom) * 0.1;
+
+            camera.x = ship.x - (canvas.width / 2) / zoom;
+            camera.y = ship.y - (canvas.height / 2) / zoom;
+        }
+
+        // Function to handle thruster sound
+        function handleThrusterSound() {
+            if (keys.w && fuel > 0 && !shipDestroyed) {
+                if (thrustSound.paused) {
+                    thrustSound.play().catch(error => console.error("Error playing thrust sound:", error));
+                }
+                thrusterVolume = Math.min(thrusterVolume + volumeTransitionSpeed, maxThrusterVolume);
+            } else {
+                thrusterVolume = Math.max(thrusterVolume - volumeTransitionSpeed, 0);
+                if (thrusterVolume === 0) {
+                    thrustSound.pause();
+                    thrustSound.currentTime = 0;
+                }
+
+
+            }
+            thrustSound.volume = thrusterVolume;
+        }
+
+        generateStars();
+        resetGame();
+        gameLoop();
+
+        // Generate stars
+        // Debug flag
+        const debugStars = true; // Set to true to show debug visualization
+
+        // Call this function when initializing the game and when significant camera movements occur
+
+        function applyGravity(object) {
+            planets.forEach(planet => {
+                const dx = planet.x - object.x;
+                const dy = planet.y - object.y;
+                const distanceSquared = dx * dx + dy * dy;
+                const distance = Math.sqrt(distanceSquared);
+
+                // New gravity calculation
+                const gravitationalReach = planet.radius * 10; // Adjust this multiplier to change the reach
+                const normalizedDistance = Math.min(distance / gravitationalReach, 1);
+                const force = (planet.mass / distanceSquared) * (1 - Math.pow(normalizedDistance, 2)) * 0.55;
+
+                const angle = Math.atan2(dy, dx);
+
+                object.velocity.x += Math.cos(angle) * force;
+                object.velocity.y += Math.sin(angle) * force;
+            });
+        }
+
+        // Preload sounds
+        const fireSounds = [];
+        for (let i = 1; i <= 10; i++) {
+            fireSounds[i] = new Audio(`${i}.mp3`);
+        }
+        function fireMissile() {
+            fuel = fuel - 10;
+            if (shipDestroyed) return; // Prevent firing if the ship is destroyed
+            if (missiles.length < maxMissiles) {
+                // Base values for jitter and speed jitter
+                let baseJitterAmount = 0.0;
+                let baseSpeedJitterAmount = 0.0;
+
+                let angle = ship.angle;
+                let missileSpeed = 5; // Base speed
+                let spawnDistance = ship.radius * 2.1; // Distance from ship center
+                let qty = 1; // Default quantity of missiles
+
+                // Adjust values based on fire mode
+                switch (fireMode) {
+                    case 1:
+                        // Current fire code
+                        qty = 1;
+                        break;
+                    case 2:
+                        // Example fire mode 2: Double the jitter, spawn 2 missiles
+                        baseJitterAmount = 1.0;
+                        baseSpeedJitterAmount = .10;
+                        qty = 12;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 0.532) * baseJitterAmount * 2;
+                            missileSpeed = 5 + (Math.random() - 3) * baseSpeedJitterAmount * 4;
+                            spawnMissile(angle, .5, spawnDistance);
+                        }
+                        playFireSound(2);
+                        return;
+                    case 3:
+                        // Example fire mode 3: Triple the jitter, spawn 3 missiles
+                        baseJitterAmount = .0;
+                        baseSpeedJitterAmount = .10;
+                        qty = 12;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 0.532) * baseJitterAmount * 2;
+                            missileSpeed = 5 + (Math.random() - 3) * baseSpeedJitterAmount * 4;
+                            spawnMissile(angle, i / 2 + .5, i / 8 + 60);
+                        }
+                        playFireSound(3);
+                        return;
+                    case 4:
+                        // Example fire mode 4: Triple shot with base jitter and speed
+                        baseJitterAmount = .010;
+                        baseSpeedJitterAmount = .10;
+                        qty = 4;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 1.5) * baseJitterAmount;
+                            missileSpeed = 5 + (Math.random() - 0.5) * 5 * baseSpeedJitterAmount;
+                            spawnMissile(angle, missileSpeed, i * 5 + spawnDistance);
+                        }
+                        playFireSound(4);
+                        return;
+                    case 5:
+                        fuel = fuel - 1
+                        baseJitterAmount = 1.0;
+                        baseSpeedJitterAmount = .10;
+                        qty = 22;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 0.532) * baseJitterAmount * 2;
+                            missileSpeed = 5 + (Math.random() - 3) * baseSpeedJitterAmount * 4;
+                            spawnMissile(angle, 5, spawnDistance);
+                        }
+                        return;
+                    // Add more cases for modes 5 to 10 as needed
+                    case 7: // Example fire mode 4: Triple shot with base jitter and speed
+                        baseJitterAmount = .10;
+                        baseSpeedJitterAmount = 2;
+                        qty = 14;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 1.5) * baseJitterAmount;
+                            missileSpeed = 5 + (Math.random() - 0.5) * 5 * baseSpeedJitterAmount;
+                            spawnMissile(angle, missileSpeed, i * 5 + spawnDistance);
+                        }
+                        playFireSound(7);
+                        return;
+                    case 6: // Example fire mode 4: Triple shot with base jitter and speed
+                        baseJitterAmount = .10;
+                        baseSpeedJitterAmount = .10;
+                        qty = 14;
+                        for (let i = 0; i < qty; i++) {
+                            angle = ship.angle + (Math.random() - 1.5) * baseJitterAmount;
+                            missileSpeed = 5 + (Math.random() - 0.5) * 5 * baseSpeedJitterAmount;
+                            spawnMissile(angle, missileSpeed, i * 5 + spawnDistance);
+                        }
+                        playFireSound(6);
+                        return;
+                    case 8: // Example fire mode 4: Triple shot with base jitter and speed
+                        baseJitterAmount = .70;
+                        baseSpeedJitterAmount = 3;
+                        qty = 9;
+                        for (let i = 0; i < qty; i++) {
+                            angle = 330 + ship.angle + (Math.random() + 4) * baseJitterAmount;
+                            missileSpeed = 9 + (Math.random() - 0.5) * 5 * baseSpeedJitterAmount;
+                            spawnMissile(angle, missileSpeed, i * 5 + spawnDistance);
+                        }
+                        playFireSound(8);
+                        return;
+                    case 9: // Example fire mode 4: Triple shot with base jitter and speed
+                        baseJitterAmount = 10;
+                        baseSpeedJitterAmount = 2;
+                        qty = 29;
+                        for (let i = 0; i < qty; i++) {
+                            angle = 330 + ship.angle + (Math.random() + 4) * baseJitterAmount;
+                            missileSpeed = 9 + (Math.random() - 0.5) * 5 * baseSpeedJitterAmount;
+                            spawnMissile(angle, missileSpeed, i * 5 + spawnDistance);
+                        }
+                        playFireSound(9);
+                        return;
+                    default:
+                        // Default behavior for any undefined modes
+                        qty = 1;
+                        break;
+                }
+                fuel = fuel - (10 * qty)
+
+                // If qty is 1, spawn a single missile with the calculated angle and speed
+                angle += (Math.random() - 0.5) * baseJitterAmount;
+                missileSpeed += (Math.random() - 0.5) * baseSpeedJitterAmount;
+                spawnMissile(angle, missileSpeed, spawnDistance);
+
+                // Play the fire sound
+                playFireSound(fireMode);
+            }
+        }
+
+        function playFireSound(mode) {
+            if (fireSounds[mode]) {
+                fireSounds[mode].currentTime = 0;
+                fireSounds[mode].play().catch(error => {
+                    console.error("Error playing sound:", error);
+                });
+            }
+        }
+
+        function spawnMissile(angle, missileSpeed, spawnDistance) {
+            // Calculate the spawn point using the ship's front point and rotation
+            const spawnPoint = {
+                x: ship.x + Math.cos(angle) * spawnDistance,
+                y: ship.y + Math.sin(angle) * spawnDistance
+            };
+
+            missiles.push({
+                x: spawnPoint.x - 18,
+                y: spawnPoint.y,
+                velocity: {
+                    x: Math.cos(angle) * missileSpeed + ship.velocity.x,
+                    y: Math.sin(angle) * missileSpeed + ship.velocity.y
+                }
+            });
+        }
+
+        function playFireSound(mode) {
+            if (fireSounds[mode]) {
+                fireSounds[mode].currentTime = 0;
+                fireSounds[mode].play();
+            }
+        }
+
+        // Example: Change the fire mode (this can be triggered by a key press or other events)
+        function changeFireMode(newMode) {
+            fireMode = newMode;
+        }
+
+        // Example key listener to change fire mode
+        window.addEventListener('keydown', (e) => {
+            if (e.key >= '1' && e.key <= '9') {
+                changeFireMode(parseInt(e.key, 10));
+            }
+        });
+
+        function updateParticles() {
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const particle = particles[i];
+                particle.x += particle.velocity.x;
+                particle.y += particle.velocity.y;
+                particle.life -= 0.01;
+
+                // Check for alien collisions
+                for (let j = aliens.length - 1; j >= 0; j--) {
+                    const alien = aliens[j];
+                    const dx = alien.x - particle.x;
+                    const dy = alien.y - particle.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < alien.radius + particle.radius) {
+                        // Calculate the force based on the particle's remaining life
+                        const forceMagnitude = particle.life * 0.1; // Adjust this multiplier to change the force strength
+
+                        // Apply the force to the alien
+                        const angle = Math.atan2(dy, dx);
+                        alien.velocity.x += Math.cos(angle) * forceMagnitude;
+                        alien.velocity.y += Math.sin(angle) * forceMagnitude;
+
+                        // Optionally, remove the particle after collision
+                        particles.splice(i, 1);
+                        break; // Exit the alien loop as the particle is removed
+                    }
+                }
+
+                // Check for planet collisions (existing code)
+                planets.forEach(planet => {
+                    const dx = planet.x - particle.x;
+                    const dy = planet.y - particle.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < planet.radius + particle.radius) {
+                        // Bounce off the planet (existing code)
+                        const normal = { x: dx / distance, y: dy / distance };
+                        const dot = particle.velocity.x * normal.x + particle.velocity.y * normal.y;
+                        particle.velocity.x = particle.velocity.x - 2 * dot * normal.x;
+                        particle.velocity.y = particle.velocity.y - 2 * dot * normal.y;
+
+                        // Move particle outside the planet to prevent getting stuck
+                        const escapeDistance = planet.radius + particle.radius - distance + 1;
+                        particle.x -= normal.x * escapeDistance;
+                        particle.y -= normal.y * escapeDistance;
+
+                        // Reduce particle life on collision
+                        particle.life -= 0.05;
+                    }
+                });
+
+                // Remove particle if it's dead
+                if (particle.life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function addParticle(isReverse) {
+            if (particles.length >= maxParticles) return;
+
+            const angle = isReverse ? ship.angle : ship.angle + Math.PI;
+            const spreadAngle = angle + (Math.random() - 0.5) * 0.5; // Slight spread
+            const speed = 2 + Math.random() * 2;
+
+            // Calculate the ship's rear point
+            const rearX = ship.x - Math.cos(ship.angle) * ship.radius;
+            const rearY = ship.y - Math.sin(ship.angle) * ship.radius;
+
+            // Add some randomness to the spawn position
+            const randomOffset = 5; // Adjust this value to control the spread of particles
+            const spawnX = rearX + (Math.random() - 0.5) * randomOffset;
+            const spawnY = rearY + (Math.random() - 0.5) * randomOffset;
+
+            particles.push({
+                x: spawnX - 20,
+                y: spawnY,
+                radius: 3 + Math.random(),
+                velocity: {
+                    x: Math.cos(spreadAngle) * speed + ship.velocity.x * 0.1,
+                    y: Math.sin(spreadAngle) * speed + ship.velocity.y * 0.1
+                },
+                life: 1 + Math.random() * 2,
+                color: isReverse ? 'orange' : undefined // Orange for reverse thrust
+            });
+        }
+
+        function updateMissiles() {
+            for (let i = missiles.length - 1; i >= 0; i--) {
+                const missile = missiles[i];
+
+                applyGravity(missile);
+
+                missile.x += missile.velocity.x;
+                missile.y += missile.velocity.y;
+
+                // Check for planet collisions
+                planets.forEach(planet => {
+                    let dx = planet.x - missile.x;
+                    let dy = planet.y - missile.y;
+
+                    // Adjust for map wrapping
+                    if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                    if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < planet.radius + 3) {
+                        collidedWithPlanet = true;
+
+                        // Calculate the normal vector
+                        const nx = dx / distance;
+                        const ny = dy / distance;
+
+                        // Calculate the dot product of velocity and normal
+                        const dot = missile.velocity.x * nx + missile.velocity.y * ny;
+
+                        // Calculate the reflection vector
+
+                        // Calculate the reflection vector
+                        missile.velocity.x = missile.velocity.x - 2 * dot * nx;
+                        missile.velocity.y = missile.velocity.y - 2 * dot * ny;
+
+                        // Move the missile outside the planet to prevent getting stuck
+                        const escapeDistance = planet.radius + 3 - distance + 1;
+                        missile.x -= nx * escapeDistance;
+                        missile.y -= ny * escapeDistance;
+
+                        // Reduce missile speed after bouncing
+                        const speed = Math.sqrt(missile.velocity.x ** 2 + missile.velocity.y ** 2);
+                        const newSpeed = speed * 0.8; // Reduce speed by 20%
+                        missile.velocity.x = (missile.velocity.x / speed) * newSpeed;
+                        missile.velocity.y = (missile.velocity.y / speed) * newSpeed;
+
+                        // Create a small effect for the bounce
+                        //createExplosion(missile.x, missile.y, 0.5, 'yellow', { x: 0, y: 0 });
+                    }
+                });
+
+                // Check for player collision (if not destroyed)
+                if (!shipDestroyed) {
+                    const dx = ship.x - missile.x;
+                    const dy = ship.y - missile.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < ship.radius + 3) { // Adjust the missile radius if needed
+                        shipDestroyed = true;
+                        createExplosion(ship.x, ship.y, 10, 'red', ship.velocity);
+                        handleShipDestruction();
+                        missiles.splice(i, 1);
+                        continue; // Move to the next missile
+                    }
+                }
+
+                // Check for alien collisions
+                for (let j = aliens.length - 1; j >= 0; j--) {
+                    const alien = aliens[j];
+                    let dx = alien.x - missile.x;
+                    let dy = alien.y - missile.y;
+
+                    // Adjust for map wrapping
+                    if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                    if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < alien.radius + 3) {
+                        // console.log('Missile hit alien');
+                        // Handle missile and alien collision
+                        missiles.splice(i, 1);
+                        createExplosion(alien.x, alien.y, 3, 'white', missile.velocity);
+
+                        // Calculate score based on distance
+                        const distanceFromShip = Math.sqrt((alien.x - ship.x) ** 2 + (alien.y - ship.y) ** 2);
+                        const scoreIncrease = Math.floor(distanceFromShip / 10);
+                        score += scoreIncrease;
+
+                        if (alien.canSplit) {
+                            // Split the alien into 3 smaller parts
+                            for (let k = 0; k < 3; k++) {
+                                const angle = (k * 2 * Math.PI / 3) + Math.random() * (Math.PI / 3);
+                                const newAlien = {
+                                    x: alien.x,
+                                    y: alien.y,
+                                    radius: alien.radius / 2,
+                                    mass: alien.mass / 8,
+                                    velocity: {
+                                        x: alien.velocity.x + Math.cos(angle) * 2,
+                                        y: alien.velocity.y + Math.sin(angle) * 2
+                                    },
+                                    rotationSpeed: alien.rotationSpeed * 2,
+                                    rotation: Math.random() * Math.PI * 2,
+                                    isOriginal: false,
+                                    canSplit: false
+                                };
+                                aliens.push(newAlien);
+                            }
+                        }
+
+                        // Remove the original alien
+                        aliens.splice(j, 1);
+                        break; // Exit the alien loop as the missile has been handled
+                    }
+                }
+
+                // Check for AShip collisions
+                for (let j = aships.length - 1; j >= 0; j--) {
+                    const aship = aships[j];
+                    const dx = aship.x - missile.x;
+                    const dy = aship.y - missile.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < aship.radius + 3) {
+                        //console.log('Missile hit AShip');
+                        missiles.splice(i, 1);
+                        aships.splice(j, 1);
+                        createExplosion(aship.x, aship.y, 1, aship.color, missile.velocity);
+                        // Increase score when an AShip is destroyed
+                        score += 2000; // Adjust the score value as needed
+
+                        break;
+                    }
+                }
+
+                // Remove missile if it's off-screen
+                if (missile.x < camera.x - canvas.width / (2 * zoom) || missile.x > camera.x + canvas.width / zoom ||
+                    missile.y < camera.y - canvas.height / (2 * zoom) || missile.y > camera.y + canvas.height / zoom) {
+                    missiles.splice(i, 1);
+                }
+            }
+        }
+
+        // Add this new function to draw the score
+        function drawScore() {
+            ctx.save();
+            ctx.font = 'Bold 20px Montserrat';
+            ctx.fillStyle = 'yellow';
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'top';
+            ctx.fillText(`Score: ${score} `, canvas.width - 10, 10);
+            ctx.fillText(`Lives: ${lives} `, canvas.width - 10, 40);
+            ctx.restore();
+        }
+        function createAlienExplosion(x, y) {
+            const particleCount = 220;
+            for (let i = 0; i < particleCount; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 2 + 1;
+                particles.push({
+                    x: x,
+                    y: y,
+                    radius: Math.random() * 2 + 1,
+                    velocity: {
+                        x: Math.cos(angle) * speed,
+                        y: Math.sin(angle) * speed
+                    },
+                    life: 1,
+                    color: 'green'
+                });
+            }
+            // Play the explosion sound if on screen
+            if (isOnScreen(x, y)) {
+                bangSound.currentTime = 0;
+                bangSound.play();
+            }
+        }
+
+        // Add a check to play bang sound only if ship is not destroyed
+        function createExplosion(x, y, sizeMultiplier = 1, color = 'white', velocity = { x: 0, y: 0 }, isPlayerShip = false) {
+            const adjustedX = (x - camera.x) * zoom;
+            const adjustedY = (y - camera.y) * zoom;
+            // Calculate visible area
+            const visibleLeft = camera.x;
+            const visibleRight = camera.x + canvas.width / zoom;
+            const visibleTop = camera.y;
+            const visibleBottom = camera.y + canvas.height / zoom;
+
+            // Check if explosion is within visible area
+            if (x >= visibleLeft && x <= visibleRight && y >= visibleTop && y <= visibleBottom) {
+                const particleCount = isPlayerShip ? 150 : 20 * sizeMultiplier;
+
+                for (let i = 0; i < particleCount; i++) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const speed = Math.random() * 2 + 1;
+                    let particleColor;
+
+                    if (isPlayerShip) {
+                        const colorChoice = Math.random();
+                        if (colorChoice < 0.33) {
+                            particleColor = 'red';
+                        } else if (colorChoice < 0.66) {
+                            particleColor = 'white';
+                        } else {
+                            particleColor = 'blue';
+                        }
+                    } else {
+                        particleColor = color;
+                    }
+
+                    particles.push({
+                        x: x,
+                        y: y,
+                        radius: Math.random() * 2 + 1,
+                        velocity: {
+                            x: Math.cos(angle) * speed + velocity.x * 0.5,
+                            y: Math.sin(angle) * speed + velocity.y * 0.5
+                        },
+                        life: 1,
+                        color: particleColor
+                    });
+                }
+
+                // Play the explosion sound
+                bangSound.currentTime = 0;
+                bangSound.play();
+            }
+        }
+        function handleGameOver() {
+            localStorage.setItem('score', score); // Store the score in localStorage
+            window.location.href = 'gameover.html'; // Redirect to gameover.html
+        }
+        function isOnScreen(x, y) {
+            return x >= camera.x && x <= camera.x + canvas.width / zoom &&
+                y >= camera.y && y <= camera.y + canvas.height / zoom;
+        }
+        document.body.style.cursor = 'none';
+
+        // Modify the gameLoop function to handle game over state
+        let gameOverDisplayed = false;
+        let gameState = 'playing'; // Can be 'playing', 'gameOver', or 'resetting'
+        let gameOverTimer = 0;
+
+        function updateAliens() {
+            aliens.forEach((alien, index) => {
+                // Apply gravity to the alien
+                applyGravityToAlien(alien);
+
+                // Limit the alien's speed
+                const speed = Math.sqrt(alien.velocity.x * alien.velocity.x + alien.velocity.y * alien.velocity.y);
+                if (speed > alienMaxSpeed) {
+                    alien.velocity.x = (alien.velocity.x / speed) * alienMaxSpeed;
+                    alien.velocity.y = (alien.velocity.y / speed) * alienMaxSpeed;
+                }
+
+                // Update position based on velocity
+                alien.x += alien.velocity.x;
+                alien.y += alien.velocity.y;
+
+                // Wrap around the map
+                alien.x = (alien.x + mapWidth) % mapWidth;
+                alien.y = (alien.y + mapHeight) % mapHeight;
+
+                // Check for planet collisions
+                let collidedWithPlanet = false;
+                planets.forEach(planet => {
+                    const dx = planet.x - alien.x;
+                    const dy = planet.y - alien.y;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+
+                    if (distance < planet.radius + alien.radius) {
+                        collidedWithPlanet = true;
+                    }
+                });
+
+                if (collidedWithPlanet) {
+                    // Create explosion effect
+                    createExplosion(alien.x, alien.y, 3, 'green', alien.velocity);
+
+                    // Remove the alien
+                    aliens.splice(index, 1);
+
+                    // Respawn the alien off-screen
+                    const newAlien = respawnAlienOffScreen();
+                    aliens.push(newAlien);
+                }
+            });
+        }
+
+        function respawnAlienOffScreen() {
+            const buffer = 100; // Distance beyond screen edge to spawn
+            let x, y;
+            const side = Math.floor(Math.random() * 4); // 0: top, 1: right, 2: bottom, 3: left
+
+            switch (side) {
+                case 0: // top
+                    x = Math.random() * mapWidth;
+                    y = camera.y - buffer;
+                    break;
+                case 1: // right
+                    x = camera.x + canvas.width / zoom + buffer;
+                    y = Math.random() * mapHeight;
+                    break;
+                case 2: // bottom
+                    x = Math.random() * mapWidth;
+                    y = camera.y + canvas.height / zoom + buffer;
+                    break;
+                case 3: // left
+                    x = camera.x - buffer;
+                    y = Math.random() * mapHeight;
+                    break;
+            }
+
+            return {
+                x: x,
+                y: y,
+                radius: Math.random() * (maxAlienRadius - minAlienRadius) + minAlienRadius,
+                velocity: {
+                    x: (Math.random() - 0.5) * 2,
+                    y: (Math.random() - 0.5) * 2
+                },
+                rotationSpeed: (Math.random() - 0.5) * rotationSpeedFactor,
+                rotation: Math.random() * Math.PI * 2,
+                isOriginal: true,
+                canSplit: true
+            };
+        }
+
+        function drawAliens() {
+            ctx.save();
+
+            aliens.forEach(alien => {
+                // Calculate adjusted position (remove the canvas center addition)
+                const adjustedX = (alien.x - camera.x) * zoom;
+                const adjustedY = (alien.y - camera.y) * zoom;
+
+                // Check if the alien is within visible bounds
+                const alienVisible =
+                    adjustedX + alien.radius * zoom >= 0 &&
+                    adjustedX - alien.radius * zoom <= canvas.width &&
+                    adjustedY + alien.radius * zoom >= 0 &&
+                    adjustedY - alien.radius * zoom <= canvas.height;
+
+                if (alienVisible) {
+                    ctx.save();
+                    // Translate to the alien's position
+                    ctx.translate(adjustedX, adjustedY);
+                    ctx.scale(zoom, zoom);
+
+                    // Draw the alien DJD
+                    ctx.beginPath();
+                    const numberOfPoints = 4;
+                    for (let i = 0; i < numberOfPoints; i++) {
+                        const angle = (i / numberOfPoints) * Math.PI * 2;
+                        const jitter = 0.8 + Math.random() * 0.4; // Random value between 0.8 and 1.2
+                        const x = Math.cos(angle) * alien.radius * jitter;
+                        const y = Math.sin(angle) * alien.radius * jitter;
+                        if (i === 0) {
+                            ctx.moveTo(x, y);
+                        } else {
+                            ctx.lineTo(x, y);
+                        }
+                    }
+                    ctx.closePath();
+
+                    // Fill the alien with black
+                    ctx.fillStyle = 'black';
+                    ctx.fill();
+
+                    // Draw the alien's edge in green
+                    ctx.strokeStyle = 'lime'; // Bright green color
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+
+                    // Add some crater-like circles
+                    const numberOfCraters = .4;
+                    for (let i = 0; i < numberOfCraters; i++) {
+                        const craterRadius = alien.radius * (0.2 + Math.random() * 0.2); // 20% to 40% of alien radius
+                        const angle = Math.random() * Math.PI * 2;
+                        const distance = alien.radius * Math.random() * 0.5; // Up to 50% of radius from center
+                        const craterX = Math.cos(angle) * distance;
+                        const craterY = Math.sin(angle) * distance;
+
+                        ctx.beginPath();
+                        ctx.arc(craterX, craterY, craterRadius, 0, Math.PI * 2);
+                        ctx.fillStyle = 'rgba(0, 255, 0, 0.1)'; // Very transparent green
+                        ctx.fill();
+                        ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)'; // Slightly more opaque green
+                        ctx.stroke();
+                    }
+
+                    ctx.restore();
+                }
+            });
+
+            ctx.restore();
+        }
+
+        function applyGravityToAlien(alien) {
+            planets.forEach(planet => {
+                const dx = planet.x - alien.x;
+                const dy = planet.y - alien.y;
+                const distanceSquared = dx * dx + dy * dy;
+                const distance = Math.sqrt(distanceSquared);
+
+                // New gravity calculation with reduced effect
+                const gravitationalReach = planet.radius * 40; // Adjust this multiplier as needed
+                const normalizedDistance = Math.min(distance / gravitationalReach, 1);
+                const force = (planet.mass / distanceSquared) * (1 - Math.pow(normalizedDistance, 2)) * 0.1; // Reduced force
+
+                const angle = Math.atan2(dy, dx);
+
+                alien.velocity.x += Math.cos(angle) * force;
+                alien.velocity.y += Math.sin(angle) * force;
+            });
+        }
+
+        function updateOrbiters() {
+            const maxStretch = 130; // Maximum distance between parent and child
+            const restLength = 5; // Preferred distance between parent and child
+
+            orbiters.forEach((orbiter, index) => {
+                // Apply gravity from planets
+                applyGravity(orbiter);
+
+                // Calculate distance to parent
+                const dx = orbiter.parent.x - orbiter.x;
+                const dy = orbiter.parent.y - orbiter.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+
+                // If distance exceeds maxStretch, move orbiter back within range
+                if (distance > maxStretch) {
+                    const angle = Math.atan2(dy, dx);
+                    orbiter.x = orbiter.parent.x - Math.cos(angle) * maxStretch;
+                    orbiter.y = orbiter.parent.y - Math.sin(angle) * maxStretch;
+                    distance = maxStretch;
+                }
+
+                // Apply a force towards the parent, stronger if stretched
+                const stretch = distance - restLength;
+                const force = 0.01 * stretch; // Adjust this multiplier to change the "pull" strength
+                orbiter.velocity.x += (dx / distance) * force;
+                orbiter.velocity.y += (dy / distance) * force;
+
+                // Add some random movement
+                orbiter.velocity.x += (Math.random() - 0.5) * 0.1;
+                orbiter.velocity.y += (Math.random() - 0.5) * 0.1;
+
+                // Update position based on velocity
+                orbiter.x += orbiter.velocity.x;
+                orbiter.y += orbiter.velocity.y;
+
+                // Wrap around the map
+                orbiter.x = (orbiter.x + mapWidth) % mapWidth;
+                orbiter.y = (orbiter.y + mapHeight) % mapHeight;
+
+                // Apply drag to slow down the orbiter
+                orbiter.velocity.x *= 0.99;
+                orbiter.velocity.y *= 0.99;
+            });
+        }
+        function gameLoop() {
+            //console.log(`Ship position: (${ ship.x.toFixed(2) }, ${ ship.y.toFixed(2) })`);
+            //console.log(`Camera position: (${ camera.x.toFixed(2) }, ${ camera.y.toFixed(2) })`);
+            //console.log(`Zoom level: ${ zoom.toFixed(2) } `);
+            ctx.fillStyle = 'rgb(0, 0, 40)';  // Bright red
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            // updateOrbiters();
+            //drawOrbiters();
+            updatePlanets();
+            drawStars();
+            drawPlanets();
+            updateParticles();
+            drawParticles();
+            updateMissiles();
+            drawMissiles();
+            updateAliens();
+            drawAliens();
+            updateAShips();
+            drawAShips();
+            drawScore();
+            drawAliensLeft();
+            drawMapBoundaries();
+            if (lives === 0 && !gameOverDisplayed) {
+                displayGameOver();
+                gameOverDisplayed = true;
+                setTimeout(() => {
+                    gameOverDisplayed = false;
+                }, 2000);
+            }
+
+            if (!shipDestroyed) {
+                updateShip();
+                drawShip();
+            }
+
+            updateZoom(); // Update zoom and camera position
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        function resetGame() {
+            initializeOrbiters();
+
+            lives = 3;
+            score = 0;
+            resetShip();
+
+            missiles.length = 0;
+            particles.length = 0;
+            camera.x = ship.x - (canvas.width / 2) / zoom;
+            camera.y = ship.y - (canvas.height / 2) / zoom;
+            shipDestroyed = false;
+            createAliens();
+        }
+        // Modify the drawAliensLeft function
+        function drawAliensLeft() {
+            const originalCount = aliens.filter(alien => alien.isOriginal).length;
+            const partCount = aliens.filter(alien => !alien.isOriginal).length;
+
+            ctx.save();
+            ctx.font = 'Bold 25px Montserrat';
+            ctx.fillStyle = 'yellow';
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'bottom';
+            drawFuelBar(); // Call the function to draw the fuel bar
+            ctx.fillText(`Original Aliens: ${originalCount} `, 10, canvas.height - 40);
+            ctx.fillText(`Alien Parts: ${partCount} `, 10, canvas.height - 10);
+            ctx.restore();
+        }
+
+        // Update the handleThrusterSound function:
+        function handleThrusterSound() {
+            if ((keys.w || keys.s) && fuel > 0 && !shipDestroyed) {
+                if (thrustSound.paused) {
+                    thrustSound.play().catch(error => console.error("Error playing thrust sound:", error));
+                }
+                thrusterVolume = Math.min(thrusterVolume + volumeTransitionSpeed, maxThrusterVolume);
+            } else {
+                thrusterVolume = Math.max(thrusterVolume - volumeTransitionSpeed, 0);
+                if (thrusterVolume === 0) {
+                    thrustSound.pause();
+                    thrustSound.currentTime = 0;
+                }
+            }
+            thrustSound.volume = thrusterVolume;
+        }
+
+        function displayGameOver() {
+            ctx.save();
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'; // Semi-transparent black
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.font = 'Bold 48px Montserrat';
+            ctx.fillStyle = 'red';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+
+            ctx.restore();
+        }
+
+        // Modify the handleShipDestruction function
+        function handleShipDestruction() {
+            lives--;
+            if (lives > 0) {
+                setTimeout(() => {
+                    resetShip();
+                    shipDestroyed = false;
+                }, 3000); // Wait 3 seconds before respawning
+            } else {
+                handleGameOver(); // Redirect to gameover.html
+            }
+
+            // Play the death sound
+            deathSound.currentTime = 0;
+            deathSound.play();
+        }
+        // Add this new function to reset the ship
+        function resetShip() {
+            ship.x = mapWidth / 2;
+            ship.y = mapHeight / 2;
+            ship.velocity = { x: 0, y: 0 };
+            ship.angle = 0;
+            ship.rotation = 0;
+        }
+        // Preload power-up sound
+        const powerUpSound = new Audio('powerup.mp3');
+
+        function createRefuelEffect(x, y) {
+            for (let i = 0; i < 4; i++) {
+                particles.push({
+                    x: x - 12 + (Math.random() - 0.5) * 20, // Spread particles a bit
+                    y: y + (Math.random() - 0.5) * 20,
+                    radius: Math.random() * 2 + 1,
+                    velocity: {
+                        x: (Math.random() - 0.5) * 1,
+                        y: (Math.random() - 0.5) * 1
+                    },
+                    life: 0.8,
+                    color: 'yellow'
+                });
+            }
+
+            // Check if fuel is completely full and change fire mode randomly
+            if (fuel >= 5000) {
+                changeFireMode(Math.floor(Math.random() * 9) + 1);
+                // Play the power-up sound
+                powerUpSound.currentTime = 0;
+                powerUpSound.play();
+            }
+        }
+
+        function calculateDistance(x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        function findFarthestPosition() {
+            let farthestDistance = 0;
+            let farthestPosition = { x: mapWidth / 2, y: mapHeight / 2 };
+
+            const steps = 10; // Number of positions to check around the map
+
+            for (let i = 0; i < steps; i++) {
+                for (let j = 0; j < steps; j++) {
+                    const posX = (i / steps) * mapWidth;
+                    const posY = (j / steps) * mapHeight;
+                    let minDistanceToPlanet = Infinity;
+
+                    for (let planet of planets) {
+                        const distance = calculateDistance(posX, posY, planet.x, planet.y);
+                        if (distance < minDistanceToPlanet) {
+                            minDistanceToPlanet = distance;
+                        }
+                    }
+
+                    if (minDistanceToPlanet > farthestDistance) {
+                        farthestDistance = minDistanceToPlanet;
+                        farthestPosition = { x: posX, y: posY };
+                    }
+                }
+            }
+
+            return farthestPosition;
+        }
+
+        // Generate stars
+        function generateStars() {
+            stars.length = 0; // Clear existing stars
+
+            for (let i = 0; i < numStars; i++) {
+                const colorChoice = Math.random();
+                let color;
+                if (colorChoice < 0.33) {
+                    color = 'white';
+                } else if (colorChoice < 0.66) {
+                    color = 'rgb(100, 149, 237)';  // Cornflower blue
+                } else {
+                    color = 'rgb(0, 255, 255)';  // Cyan
+                }
+
+                // Generate stars within the canvas area
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    z: Math.random() * maxStarDepth,
+                    radius: Math.random() * .7 + 0.2,  // Slightly varied star sizes
+                    color: color
+                });
+            }
+        }
+
+        function updateStars(dx, dy) {
+            const scaledDx = dx * zoom;
+            const scaledDy = dy * zoom;
+
+            stars.forEach(star => {
+                // Calculate parallax effect based on z-depth
+                // Ensure minimum movement speed to avoid static stars
+                const parallaxFactor = Math.max(0.1, (maxStarDepth - star.z) / maxStarDepth);
+                star.x -= scaledDx * parallaxFactor;
+                star.y -= scaledDy * parallaxFactor;
+
+                // Wrap stars around the canvas
+                if (star.x < 0) star.x += canvas.width;
+                if (star.x >= canvas.width) star.x -= canvas.width;
+                if (star.y < 0) star.y += canvas.height;
+                if (star.y >= canvas.height) star.y -= canvas.height;
+            });
+        }
+
+        function drawStars() {
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.radius, 0, Math.PI * 2);
+
+                // Create a twinkling effect
+                const twinkle = Math.random() * 1.5 + 0.1;  // Random value between 0.5 and 1
+
+                ctx.fillStyle = star.color.replace(')', `, ${twinkle})`).replace('rgb', 'rgba');
+                ctx.fill();
+            });
+        }
+        function checkShipCollisions() {
+            if (shipDestroyed) return;
+            // Check for orbiter collisions with planets and aliens
+            orbiters.forEach(orbiter => {
+                // Check planet collisions
+                for (let planet of planets) {
+                    let dx = planet.x - orbiter.x;
+                    let dy = planet.y - orbiter.y;
+                    if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                    if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < planet.radius + orbiter.radius) {
+                        // Handle collision (e.g., destroy orbiter, create explosion)
+                        createExplosion(orbiter.x, orbiter.y, 5, 'blue', orbiter.velocity);
+                        // Remove orbiter from array
+                        const index = orbiters.indexOf(orbiter);
+                        if (index > -1) {
+                            orbiters.splice(index, 1);
+                        }
+                    }
+                }
+
+                // Check alien collisions
+                for (let alien of aliens) {
+                    let dx = alien.x - orbiter.x;
+                    let dy = alien.y - orbiter.y;
+                    if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                    if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    if (distance < alien.radius + orbiter.radius) {
+                        // Handle collision (e.g., destroy alien and orbiter, create explosion)
+                        createExplosion(orbiter.x, orbiter.y, 5, 'blue', orbiter.velocity);
+                        createExplosion(alien.x, alien.y, 5, 'green', alien.velocity);
+                        // Remove orbiter and alien from their respective arrays
+                        const orbiterIndex = orbiters.indexOf(orbiter);
+                        if (orbiterIndex > -1) {
+                            orbiters.splice(orbiterIndex, 1);
+                        }
+                        const alienIndex = aliens.indexOf(alien);
+                        if (alienIndex > -1) {
+                            aliens.splice(alienIndex, 1);
+                        }
+                        // Increase score
+                        score += 100;
+                    }
+                }
+            });
+            // Check for planet collisions and refueling
+            for (let planet of planets) {
+                let dx = planet.x - ship.x;
+                let dy = planet.y - ship.y;
+
+                // Adjust for map wrapping
+                if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < planet.radius + ship.radius) {
+                    shipDestroyed = true;
+                    createExplosion(ship.x, ship.y, 10, 'red', ship.velocity);
+                    handleShipDestruction();
+                    return;
+                }
+
+                // Check for refueling proximity
+                const refuelDistance = planet.radius * 2.5; // Adjust this multiplier as needed
+                if (distance < refuelDistance) {
+                    // Refuel the ship
+                    fuel = Math.min(fuel + 77, 5000); // Increase fuel by 77, max of 5000
+                    score += 7; // Add 7 points for refueling
+                    // Optional: Create a visual effect for refueling
+                    createRefuelEffect(ship.x, ship.y);
+                }
+            }
+
+            // Check for alien collisions
+            for (let alien of aliens) {
+                let dx = alien.x - ship.x;
+                let dy = alien.y - ship.y;
+
+                // Adjust for map wrapping
+                if (Math.abs(dx) > mapWidth / 2) dx = mapWidth - Math.abs(dx);
+                if (Math.abs(dy) > mapHeight / 2) dy = mapHeight - Math.abs(dy);
+
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance < alien.radius + ship.radius) {
+                    shipDestroyed = true;
+                    createExplosion(ship.x, ship.y, 10, 'red', ship.velocity);
+                    handleShipDestruction();
+                    return;
+                }
+            }
+        }
+
+        resetGame();
+        gameLoop();
+
+        // Load ship data and initialize the game
+        loadShipData().then(() => {
+            console.log("Ship data loaded, initializing game...");
+            initializeGame();
+            gameLoop();
+        }).catch(error => console.error("Error initializing game:", error));
+
+        function initializeGame() {
+            console.log("Initializing game...");
+            // Clear existing AShips
+            aships.length = 0;
+
+            // Create new AShips with the loaded designs
+            for (let type = 0; type < 16; type++) {
+                for (let i = 0; i < 110; i++) {
+                    let x, y;
+                    const safeDistance = 800;
+                    do {
+                        x = Math.random() * mapWidth;
+                        y = Math.random() * mapHeight;
+                    } while (isPositionInsidePlanet(x, y) || isTooCloseToPlayer(x, y, safeDistance));
+
+                    aships.push(new AShip(type, x, y));
+                }
+            }
+            console.log(`Created ${aships.length} AShips`);
+
+            // Other initialization code...
+            resetGame();
+        }
+
+    </script>
+</body>
+
+</html>
